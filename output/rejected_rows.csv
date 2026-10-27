@@ -1,0 +1,4 @@
+date,amount,category,note,rejection_reason
+10/4/2026,,Bills,Electricity,invalid amount
+10/5/2026,-250,Shopping,Refund adjustment,amount must be positive
+2026-13-40,300,Food,Dinner,invalid date
