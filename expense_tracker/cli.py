@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from expense_tracker.csv_tools import export_to_csv, export_with_side_report, import_csv, save_spending_chart
 from expense_tracker.database import (
     add_expense,
     delete_expense,
@@ -97,9 +98,34 @@ def handle_delete(args, conn):
 
 
 def handle_report(args, conn):
-    month = validate_month(args.month)
+    # Safely get attributes that may only exist on sub-commands
+    raw_month = getattr(args, "month", None)
+    raw_category = getattr(args, "category", None)
+    report_cmd = getattr(args, "report_command", None)
+
+    month = validate_month(raw_month) if raw_month else None
+    cat = validate_category(raw_category) if raw_category else None
+
+    # CASE 1: python main.py report export --month 2026-10 ...
+    if report_cmd == "export":
+        out_file = getattr(args, "out", None) or f"output/report_expenses_{month or 'all'}.csv"
+        
+        count = export_with_side_report(conn, out_file, month=month, category=cat)
+        
+        if month:
+            report = generate_monthly_report(conn, month)
+            print(format_report_text(report))
+            
+        print(f"📁 Successfully exported {count} expenses with side-by-side report to '{out_file}'.")
+        return
+
+    # CASE 2: python main.py report --month 2026-10
+    if not month:
+        print("❌ Error: the following arguments are required: --month")
+        return
+
     report = generate_monthly_report(conn, month)
-    print(format_report_text(report))
+    print(format_report_text(report))   
 
 
 def handle_export(args, conn):
@@ -169,9 +195,16 @@ def build_parser():
     p_del = subparsers.add_parser("delete", help="Delete an expense by ID")
     p_del.add_argument("id", type=int, help="Expense ID to delete")
 
-    # report
-    p_rep = subparsers.add_parser("report", help="Generate monthly spending report")
-    p_rep.add_argument("--month", required=True, help="Month to report on (YYYY-MM)")
+    # Inside build_parser() in cli.py
+    p_rep = subparsers.add_parser("report", help="Generate monthly spending report or export it")
+    p_rep.add_argument("--month", help="Month to report on (YYYY-MM)")
+    p_rep.add_argument("--category", help="Filter by category")  # <--- ensures args.category always exists
+
+    rep_subparsers = p_rep.add_subparsers(dest="report_command")
+    p_rep_exp = rep_subparsers.add_parser("export", help="Export expenses alongside report summary")
+    p_rep_exp.add_argument("--month", help="Month to report on (YYYY-MM)")
+    p_rep_exp.add_argument("--category", help="Filter by category")
+    p_rep_exp.add_argument("--out", help="Output CSV file path")
 
     # export
     p_exp = subparsers.add_parser("export", help="Export expenses to CSV")

@@ -143,6 +143,63 @@ def import_csv(conn: sqlite3.Connection, file_path: str, rejected_out_path: str 
     }
 
 
+def export_with_side_report(conn: sqlite3.Connection, output_path: str, month: Optional[str] = None, category: Optional[str] = None) -> int:
+    """Export expenses to CSV side-by-side with the monthly category breakdown report."""
+    from expense_tracker.reports import generate_monthly_report
+
+    expenses = list_expenses(conn, month=month, category=category)
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    # 1. Prepare raw expense rows
+    raw_headers = ["id", "date", "amount", "category", "note"]
+    expense_rows = [
+        [exp["id"], exp["date"], f"{exp['amount']:.2f}", exp["category"], exp["note"]]
+        for exp in expenses
+    ]
+
+    # 2. Prepare report side-table rows
+    report_headers = ["Report Category", "Count", "Total (₹)", "Share (%)"]
+    report_rows = []
+
+    if month:
+        report = generate_monthly_report(conn, month)
+        for b in report["breakdown"]:
+            report_rows.append([b["category"], b["count"], f"{b['total']:,.2f}", f"{b['share']:.1f}%"])
+        report_rows.append([])
+        report_rows.append(["Total Count", report["total_count"], "", ""])
+        report_rows.append(["Total Spent", f"₹{report['total_amount']:,.2f}", "", ""])
+    else:
+        # All-time aggregation when no specific month is filtered
+        total_sum = sum(exp["amount"] for exp in expenses)
+        total_count = len(expenses)
+        cat_totals = {}
+        cat_counts = {}
+        for exp in expenses:
+            c = exp["category"]
+            cat_totals[c] = cat_totals.get(c, Decimal("0.00")) + exp["amount"]
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+
+        for c, amt in sorted(cat_totals.items(), key=lambda x: x[1], reverse=True):
+            share = (amt / total_sum * 100) if total_sum > 0 else Decimal("0.0")
+            report_rows.append([c, cat_counts[c], f"{amt:,.2f}", f"{share:.1f}%"])
+        report_rows.append([])
+        report_rows.append(["Total Count", total_count, "", ""])
+        report_rows.append(["Total Spent", f"₹{total_sum:,.2f}", "", ""])
+
+    # 3. Combine headers and rows side-by-side separated by an empty column
+    with open(output_path, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(raw_headers + [""] + report_headers)
+
+        max_rows = max(len(expense_rows), len(report_rows))
+        for i in range(max_rows):
+            left = expense_rows[i] if i < len(expense_rows) else ["", "", "", "", ""]
+            right = report_rows[i] if i < len(report_rows) else ["", "", "", ""]
+            writer.writerow(left + [""] + right)
+
+    return len(expenses)
+
+
 def save_spending_chart(conn: sqlite3.Connection, month_str: str, output_image_path: str = "output/chart.png") -> Optional[str]:
     """Generate a category spending bar chart using matplotlib (R11 stretch requirement)."""
     try:
